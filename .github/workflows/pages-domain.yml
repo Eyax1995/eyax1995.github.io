@@ -1,0 +1,47 @@
+name: Pages domain
+
+# Manual tool to inspect and manage the GitHub Pages custom domain (eyax249.com)
+# without opening the repository settings page.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "check = show status · recheck = re-save domain to re-run the DNS check · enforce = turn on Enforce HTTPS"
+        required: true
+        default: check
+        type: choice
+        options: [check, recheck, enforce]
+
+permissions:
+  pages: write
+  contents: read
+
+jobs:
+  domain:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DOMAIN: eyax249.com
+    steps:
+      - name: Re-save custom domain (re-runs the DNS check)
+        if: inputs.action == 'recheck'
+        run: gh api -X PUT "repos/$REPO/pages" -f cname="$DOMAIN"
+
+      - name: Enforce HTTPS
+        if: inputs.action == 'enforce'
+        run: gh api -X PUT "repos/$REPO/pages" -f cname="$DOMAIN" -F https_enforced=true
+
+      - name: Pages status
+        run: gh api "repos/$REPO/pages" --jq '{cname, status, html_url, https_enforced, https_certificate}'
+
+      - name: DNS health check
+        continue-on-error: true
+        run: |
+          for i in 1 2 3 4 5 6; do
+            out=$(gh api "repos/$REPO/pages/health" -i 2>&1) || true
+            code=$(printf '%s' "$out" | head -1 | awk '{print $2}')
+            if [ "$code" = "202" ]; then echo "health check still running ($i)"; sleep 10; continue; fi
+            printf '%s\n' "$out" | sed -n '/^{/,$p' | jq '{domain: .domain | {host, is_pages_domain, responds_to_https, enforces_https, is_proxied, is_cloudflare_ip, dns_resolves, is_served_by_pages, is_valid, reason, https_error, is_https_eligible, caa_error}, alt_domain: .alt_domain | {host, is_served_by_pages, is_valid, reason, https_error}}' || printf '%s\n' "$out"
+            break
+          done
